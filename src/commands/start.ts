@@ -6,6 +6,7 @@ import { writeState, type StateData } from "../statusline";
 import { cronMatches, nextCronMatch } from "../cron";
 import { clearJobSchedule, loadJobs } from "../jobs";
 import { writePidFile, cleanupPidFile, checkExistingDaemon } from "../pid";
+import { resetSession } from "../sessions";
 import { initConfig, loadSettings, reloadSettings, resolvePrompt, type HeartbeatConfig, type Settings } from "../config";
 import { getDayAndMinuteAtOffset } from "../timezone";
 import { startWebUi, type WebServerHandle } from "../web";
@@ -315,6 +316,10 @@ export async function start(args: string[] = []) {
   }
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);
+  process.on("SIGUSR1", async () => {
+    console.log(`[${ts()}] Session reset via SIGUSR1 — will bootstrap fresh on next run.`);
+    await resetSession();
+  });
 
   console.log("ClaudeClaw daemon started");
   console.log(`  PID: ${process.pid}`);

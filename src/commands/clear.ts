@@ -1,6 +1,5 @@
 import { backupSession } from "../sessions";
 import { checkExistingDaemon } from "../pid";
-import { stop } from "./stop";
 
 export async function clear() {
   const backup = await backupSession();
@@ -11,13 +10,13 @@ export async function clear() {
     console.log("No active session to back up.");
   }
 
-  // If daemon is running, stop it so the next start gets a fresh session
   const pid = await checkExistingDaemon();
   if (pid) {
-    console.log("Stopping daemon so next start creates a fresh session...");
-    await stop();
+    process.kill(pid, "SIGUSR1");
+    console.log("Session cleared. Daemon will bootstrap fresh context on next run.");
   } else {
     console.log("No daemon running. Next start will create a new session.");
-    process.exit(0);
   }
+
+  process.exit(0);
 }
