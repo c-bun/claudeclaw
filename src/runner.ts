@@ -20,7 +20,8 @@ export interface RunResult {
   exitCode: number;
 }
 
-const RATE_LIMIT_PATTERN = /you(?:'|’)ve hit your limit/i;
+const RATE_LIMIT_PATTERN = /you(?:’|’)ve hit your limit/i;
+const JOB_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes
 
 // Serial queue — prevents concurrent --resume on the same session
 let queue: Promise<unknown> = Promise.resolve();
@@ -78,16 +79,23 @@ async function runClaudeOnce(
     env: buildChildEnv(baseEnv, model, api),
   });
 
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    proc.kill();
+  }, JOB_TIMEOUT_MS);
+
   const [rawStdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
   await proc.exited;
+  clearTimeout(timer);
 
   return {
-    rawStdout,
+    rawStdout: timedOut ? `[Job timed out after ${JOB_TIMEOUT_MS / 60000} minutes]` : rawStdout,
     stderr,
-    exitCode: proc.exitCode ?? 1,
+    exitCode: timedOut ? 124 : (proc.exitCode ?? 1),
   };
 }
 
