@@ -5,6 +5,25 @@ import { buildState, buildTechnicalInfo, sanitizeSettings } from "./services/sta
 import { readHeartbeatSettings, updateHeartbeatSettings } from "./services/settings";
 import { createQuickJob, deleteJob } from "./services/jobs";
 import { readLogs } from "./services/logs";
+import { runUserMessage } from "../runner";
+import { join } from "path";
+import { homedir } from "os";
+
+let voiceTokenCache: string | null | undefined = undefined;
+
+async function getVoiceToken(): Promise<string | null> {
+  if (voiceTokenCache !== undefined) return voiceTokenCache;
+  try {
+    const secretsPath = join(homedir(), ".claudeclaw", "secrets.json");
+    const secrets = await Bun.file(secretsPath).json();
+    voiceTokenCache = typeof secrets.voiceToken === "string" && secrets.voiceToken.trim()
+      ? secrets.voiceToken.trim()
+      : null;
+  } catch {
+    voiceTokenCache = null;
+  }
+  return voiceTokenCache;
+}
 
 export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
   const server = Bun.serve({
@@ -146,6 +165,37 @@ export function startWebUi(opts: StartWebUiOptions): WebServerHandle {
       if (url.pathname === "/api/logs") {
         const tail = clampInt(url.searchParams.get("tail"), 200, 20, 2000);
         return json(await readLogs(tail));
+      }
+
+      if (url.pathname === "/api/ask" && req.method === "POST") {
+        const voiceToken = await getVoiceToken();
+        if (voiceToken) {
+          const auth = req.headers.get("Authorization");
+          if (auth !== `Bearer ${voiceToken}`) {
+            return new Response(JSON.stringify({ ok: false, error: "Unauthorized" }), {
+              status: 401,
+              headers: { "Content-Type": "application/json; charset=utf-8" },
+            });
+          }
+        }
+        try {
+          const body = await req.json();
+          const text = typeof body.text === "string" ? body.text.trim() : "";
+          if (!text) return json({ ok: false, error: "text is required" });
+          const result = await runUserMessage("voice", `[via voice dictation — may be garbled. Respond in plain prose only: no markdown, no bullet points, no URLs, no formatting of any kind. Your response will be read aloud.]\n${text}`);
+          const response = result.stdout.trim();
+          // Append to voice transcript log in Obsidian
+          try {
+            const logPath = join(process.cwd(), "ObsidianClaudeClaw", "Claw Voice Log.md");
+            const now = new Date().toLocaleString("en-US", { timeZone: "America/Los_Angeles", hour12: false });
+            const entry = `\n## ${now}\n\n**You:** ${text}\n\n**Claw:** ${response}\n\n---\n`;
+            await Bun.write(logPath, (await Bun.file(logPath).exists() ? await Bun.file(logPath).text() : "") + entry);
+          } catch { /* log failure shouldn't break the response */ }
+          if (opts.onVoiceMessage) opts.onVoiceMessage(text, response).catch(() => {});
+          return json({ ok: true, response });
+        } catch (err) {
+          return json({ ok: false, error: String(err) });
+        }
       }
 
       return new Response("Not found", { status: 404 });

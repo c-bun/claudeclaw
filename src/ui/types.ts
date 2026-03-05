@@ -27,4 +27,5 @@ export interface StartWebUiOptions {
     excludeWindows?: Array<{ days?: number[]; start: string; end: string }>;
   }) => void | Promise<void>;
   onJobsChanged?: () => void | Promise<void>;
+  onVoiceMessage?: (text: string, response: string) => void | Promise<void>;
 }

@@ -428,6 +428,13 @@ export async function start(args: string[] = []) {
             updateState();
             console.log(`[${ts()}] Jobs reloaded from Web UI`);
           },
+          onVoiceMessage: async (text, response) => {
+            if (!telegramSend || currentSettings.telegram.allowedUserIds.length === 0) return;
+            const msg = `🎙️ *Voice*\n\n*You:* ${text}\n\n*Claw:* ${response}`;
+            for (const userId of currentSettings.telegram.allowedUserIds) {
+              telegramSend(userId, msg).catch(() => {});
+            }
+          },
         });
       } catch (err) {
         lastError = err;
