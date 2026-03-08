@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "fs/promises";
+import { mkdir, readFile, writeFile, appendFile } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 import { getSession, createSession } from "./sessions";
@@ -6,6 +6,8 @@ import { getSettings, type ModelConfig, type SecurityConfig } from "./config";
 import { buildClockPromptPrefix } from "./timezone";
 
 const LOGS_DIR = join(process.cwd(), ".claude/claudeclaw/logs");
+const TOKEN_CSV = join(process.cwd(), "logs/token-usage.csv");
+const TOKEN_CSV_HEADER = "timestamp,date,time,job_name,session_id,model_config,input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens,total_tokens,cost_usd,exit_code\n";
 // Resolve prompts relative to the claudeclaw installation, not the project dir
 const PROMPTS_DIR = join(import.meta.dir, "..", "prompts");
 const HEARTBEAT_PROMPT_FILE = join(PROMPTS_DIR, "heartbeat", "HEARTBEAT.md");
@@ -210,6 +212,43 @@ export async function loadHeartbeatPromptTemplate(): Promise<string> {
   }
 }
 
+interface UsageData {
+  input_tokens?: number;
+  output_tokens?: number;
+  cache_read_input_tokens?: number;
+  cache_creation_input_tokens?: number;
+}
+
+async function appendTokenUsage(
+  name: string,
+  sessionId: string,
+  modelConfig: string,
+  usage: UsageData | undefined,
+  costUsd: number | undefined,
+  exitCode: number
+): Promise<void> {
+  const now = new Date();
+  const ts = now.toISOString();
+  const date = ts.slice(0, 10);
+  const time = ts.slice(11, 19);
+  const input = usage?.input_tokens ?? 0;
+  const output = usage?.output_tokens ?? 0;
+  const cacheRead = usage?.cache_read_input_tokens ?? 0;
+  const cacheCreate = usage?.cache_creation_input_tokens ?? 0;
+  const total = input + output + cacheRead + cacheCreate;
+  const cost = costUsd ?? 0;
+  const row = `${ts},${date},${time},${name},${sessionId},${modelConfig},${input},${output},${cacheRead},${cacheCreate},${total},${cost},${exitCode}\n`;
+  try {
+    await mkdir(join(process.cwd(), "logs"), { recursive: true });
+    if (!existsSync(TOKEN_CSV)) {
+      await writeFile(TOKEN_CSV, TOKEN_CSV_HEADER, "utf8");
+    }
+    await appendFile(TOKEN_CSV, row, "utf8");
+  } catch (e) {
+    console.error(`[${new Date().toLocaleTimeString()}] Failed to write token usage:`, e);
+  }
+}
+
 async function execClaude(name: string, prompt: string): Promise<RunResult> {
   await mkdir(LOGS_DIR, { recursive: true });
 
@@ -230,9 +269,8 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
     `[${new Date().toLocaleTimeString()}] Running: ${name} (${isNew ? "new session" : `resume ${existing.sessionId.slice(0, 8)}`}, security: ${security.level})`
   );
 
-  // New session: use json output to capture Claude's session_id
-  // Resumed session: use text output with --resume
-  const outputFormat = isNew ? "json" : "text";
+  // Always use json output to capture session_id, result, and token usage
+  const outputFormat = "json";
   const args = ["claude", "-p", prompt, "--output-format", outputFormat, ...securityArgs];
 
   if (!isNew) {
@@ -290,17 +328,22 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
     stdout = rateLimitMessage;
   }
 
-  // For new sessions, parse the JSON to extract session_id and result text
-  if (!rateLimitMessage && isNew && exitCode === 0) {
+  // Parse JSON output to extract result text, session_id, and token usage
+  let usageData: UsageData | undefined;
+  let costUsd: number | undefined;
+  if (!rateLimitMessage && exitCode === 0) {
     try {
       const json = JSON.parse(rawStdout);
-      sessionId = json.session_id;
       stdout = json.result ?? "";
-      // Save the real session ID from Claude Code
-      await createSession(sessionId);
-      console.log(`[${new Date().toLocaleTimeString()}] Session created: ${sessionId}`);
+      usageData = json.usage;
+      costUsd = json.total_cost_usd;
+      if (isNew && json.session_id) {
+        sessionId = json.session_id;
+        await createSession(sessionId);
+        console.log(`[${new Date().toLocaleTimeString()}] Session created: ${sessionId}`);
+      }
     } catch (e) {
-      console.error(`[${new Date().toLocaleTimeString()}] Failed to parse session from Claude output:`, e);
+      console.error(`[${new Date().toLocaleTimeString()}] Failed to parse Claude JSON output:`, e);
     }
   }
 
@@ -324,6 +367,7 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   ].join("\n");
 
   await Bun.write(logFile, output);
+  await appendTokenUsage(name, sessionId, usedFallback ? "fallback" : "primary", usageData, costUsd, exitCode);
   console.log(`[${new Date().toLocaleTimeString()}] Done: ${name} → ${logFile}`);
 
   return result;
