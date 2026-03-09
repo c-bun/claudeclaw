@@ -71,6 +71,10 @@ Start the heartbeat daemon for this project. Follow these steps exactly:
 
    - **Model**: Set `model` in settings to their choice (e.g. `"opus"`, `"sonnet"`, `"haiku"`, `"glm"`). Default is `"opus"` if they don't pick.
    - **If model is `glm`**: Ask in normal free-form text for API token and set top-level `api` to that value (optional; user can skip). Only ask this token question when the selected model is `glm`.
+   - **Agentic mode**: Use AskUserQuestion to ask:
+     - "Enable agentic model routing? This automatically uses Opus for planning/thinking and Sonnet for implementation." (header: "Agentic", options: "Yes (Recommended)", "No — use single model")
+     - If "Yes": Set `agentic.enabled` to `true`, `agentic.planningModel` to `"opus"`, and `agentic.implementationModel` to `"sonnet"`.
+     - If "No": Set `agentic.enabled` to `false`.
    - Ask whether to enable GLM fallback (kicks in automatically when your Claude token limit is hit). The fallback model is always `glm` — no other model is supported. Use AskUserQuestion: "Enable GLM fallback? Automatically switches to GLM when your Claude limit is hit." (header: "Fallback", options: "Yes — enable GLM fallback", "Skip"). If yes, ask in normal free-form text for the GLM API token (optional, user can skip). Set `fallback.model` to `"glm"` and `fallback.api` to the token if provided.
 
    - **If yes to heartbeat**: Use AskUserQuestion again with one question:
@@ -170,6 +174,11 @@ Defaults: `WEB_HOST=127.0.0.1`, `WEB_PORT=4632` unless changed via settings or `
     "model": "glm",
     "api": ""
   },
+  "agentic": {
+    "enabled": true,
+    "planningModel": "opus",
+    "implementationModel": "sonnet"
+  },
   "timezone": "UTC+0",
   "heartbeat": {
     "enabled": true,
@@ -194,10 +203,13 @@ Defaults: `WEB_HOST=127.0.0.1`, `WEB_PORT=4632` unless changed via settings or `
   }
 }
 ```
-- `model` — Claude model to use (`opus`, `sonnet`, `haiku`, `glm`, or full model ID). Empty string uses default.
+- `model` — Claude model to use (`opus`, `sonnet`, `haiku`, `glm`, or full model ID). Empty string uses default. Ignored when `agentic.enabled` is true.
 - `api` — API token used when `model` is `glm` (passed as `ANTHROPIC_AUTH_TOKEN` for that provider path).
-- `fallback.model` — always `"glm"`. Automatically used when your Claude token limit is hit. No other fallback model is supported.
-- `fallback.api` — API token for the GLM fallback model.
+- `fallback.model` — backup model used automatically if the primary run returns a rate-limit message. Prefer `glm` for provider diversity.
+- `fallback.api` — optional API token to use with `fallback.model`.
+- `agentic.enabled` — when true, automatically routes tasks to appropriate models based on task type
+- `agentic.planningModel` — model for planning, thinking, research, and system design tasks (default: `opus`)
+- `agentic.implementationModel` — model for code generation, implementation, and deployment tasks (default: `sonnet`)
 - `timezone` — canonical app timezone as UTC offset text (example: `UTC+1`, `UTC-5`, `UTC+03:30`). Heartbeat windows, jobs, and UI all use this timezone.
 - `heartbeat.enabled` — whether the recurring heartbeat runs
 - `heartbeat.interval` — minutes between heartbeat runs
