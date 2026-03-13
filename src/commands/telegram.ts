@@ -1,4 +1,4 @@
-import { ensureProjectClaudeMd, run, runUserMessage } from "../runner";
+import { ensureProjectClaudeMd, run, runUserMessage, notifyAuthExpired } from "../runner";
 import { getSettings, loadSettings } from "../config";
 import { resetSession } from "../sessions";
 import { transcribeAudioToText } from "../whisper";
@@ -504,6 +504,12 @@ async function handleMessage(message: TelegramMessage): Promise<void> {
   if (command === "/reset") {
     await resetSession();
     await sendMessage(config.token, chatId, "Global session reset. Next message starts fresh.");
+    return;
+  }
+
+  if (command === "/test-auth-alert") {
+    await notifyAuthExpired(true);
+    await sendMessage(config.token, chatId, "Test fired — check for the auth alert above.");
     return;
   }
 

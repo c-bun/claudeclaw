@@ -25,7 +25,7 @@ const DEFAULT_SETTINGS: Settings = {
   },
   telegram: { token: "", allowedUserIds: [] },
   security: { level: "moderate", allowedTools: [], disallowedTools: [] },
-  web: { enabled: false, host: "127.0.0.1", port: 4632 },
+  web: { enabled: false, host: "0.0.0.0", port: 4632 },
   stt: { baseUrl: "", model: "" },
 };
 
@@ -150,7 +150,7 @@ function parseSettings(raw: Record<string, any>): Settings {
     },
     web: {
       enabled: raw.web?.enabled ?? false,
-      host: raw.web?.host ?? "127.0.0.1",
+      host: raw.web?.host ?? "0.0.0.0",
       port: Number.isFinite(raw.web?.port) ? Number(raw.web.port) : 4632,
     },
     stt: {

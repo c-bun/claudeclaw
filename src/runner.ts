@@ -23,7 +23,10 @@ export interface RunResult {
 }
 
 const RATE_LIMIT_PATTERN = /you(?:’|’)ve hit your limit/i;
+const AUTH_ERROR_PATTERN = /authentication_error|OAuth token has expired/i;
 const JOB_TIMEOUT_MS = 45 * 60 * 1000; // 45 minutes
+const AUTH_ALERT_DEBOUNCE_MS = 4 * 60 * 60 * 1000; // 4 hours
+let lastAuthAlertTime = 0;
 
 // Serial queue — prevents concurrent --resume on the same session
 let queue: Promise<unknown> = Promise.resolve();
@@ -249,6 +252,28 @@ async function appendTokenUsage(
   }
 }
 
+export async function notifyAuthExpired(force = false): Promise<void> {
+  const now = Date.now();
+  if (!force && now - lastAuthAlertTime < AUTH_ALERT_DEBOUNCE_MS) return;
+  lastAuthAlertTime = now;
+
+  const { telegram } = getSettings();
+  if (!telegram.token || telegram.allowedUserIds.length === 0) return;
+
+  const chatId = telegram.allowedUserIds[0];
+  const text = "⚠️ Claude auth expired — run `claude auth login` on the Pi to restore.";
+
+  try {
+    await fetch(`https://api.telegram.org/bot${telegram.token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text }),
+    });
+  } catch (err) {
+    console.error(`[runner] Failed to send auth alert: ${err instanceof Error ? err.message : err}`);
+  }
+}
+
 async function execClaude(name: string, prompt: string): Promise<RunResult> {
   await mkdir(LOGS_DIR, { recursive: true });
 
@@ -323,6 +348,10 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   let stdout = rawStdout;
   let sessionId = existing?.sessionId ?? "unknown";
   const rateLimitMessage = extractRateLimitMessage(rawStdout, stderr);
+
+  if (exitCode !== 0 && AUTH_ERROR_PATTERN.test(rawStdout)) {
+    notifyAuthExpired().catch(() => {});
+  }
 
   if (rateLimitMessage) {
     stdout = rateLimitMessage;
