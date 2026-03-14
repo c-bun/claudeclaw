@@ -1,126 +1,116 @@
 /**
- * Intelligent model routing based on task type.
- * Routes planning/thinking tasks to Opus, implementation tasks to Sonnet.
+ * Intelligent model routing based on configurable task modes.
+ * Each mode defines a name, model, keywords, and optional phrases.
  */
 
-export type TaskType = "planning" | "implementation";
+import type { AgenticMode } from "./config";
 
 interface TaskClassification {
-  type: TaskType;
+  mode: string;
+  model: string;
   confidence: number;
   reasoning: string;
 }
 
-// Keywords that strongly indicate planning/thinking tasks (Opus)
-const PLANNING_KEYWORDS = [
-  "plan", "design", "architect", "strategy", "approach",
-  "research", "investigate", "analyze", "explore", "understand",
-  "think", "consider", "evaluate", "assess", "review",
-  "system design", "trade-off", "decision", "choose", "compare",
-  "why", "how should", "what if", "pros and cons",
-  "brainstorm", "ideate", "concept", "proposal",
-];
-
-// Keywords that strongly indicate implementation tasks (Sonnet)
-const IMPLEMENTATION_KEYWORDS = [
-  "implement", "code", "write", "create", "build", "add",
-  "fix", "debug", "refactor", "update", "modify", "change",
-  "deploy", "run", "execute", "install", "configure",
-  "test", "commit", "push", "merge", "release",
-  "generate", "scaffold", "setup", "initialize",
-];
-
-// Phrases that indicate planning even if implementation keywords are present
-const PLANNING_PHRASES = [
-  "how to implement",
-  "how should i implement",
-  "what's the best way to",
-  "should i",
-  "which approach",
-  "help me decide",
-  "help me understand",
-];
-
 /**
- * Classify a prompt to determine which model should handle it.
+ * Classify a prompt against configurable modes.
+ * Phrases are checked first (high priority), then keyword scoring.
  */
-export function classifyTask(prompt: string): TaskClassification {
+export function classifyTask(
+  prompt: string,
+  modes: AgenticMode[],
+  defaultMode: string,
+): TaskClassification {
   const normalized = prompt.toLowerCase().trim();
 
-  // Check for planning phrases first (highest priority)
-  for (const phrase of PLANNING_PHRASES) {
-    if (normalized.includes(phrase)) {
-      return {
-        type: "planning",
-        confidence: 0.95,
-        reasoning: `Contains planning phrase: "${phrase}"`,
-      };
+  // Phase 1: Check phrases (highest priority)
+  for (const mode of modes) {
+    if (!mode.phrases) continue;
+    for (const phrase of mode.phrases) {
+      if (normalized.includes(phrase)) {
+        return {
+          mode: mode.name,
+          model: mode.model,
+          confidence: 0.95,
+          reasoning: `Matched phrase "${phrase}" → ${mode.name}`,
+        };
+      }
     }
   }
 
-  // Count keyword matches
-  let planningScore = 0;
-  let implementationScore = 0;
-
-  for (const keyword of PLANNING_KEYWORDS) {
-    if (normalized.includes(keyword)) {
-      planningScore++;
+  // Phase 2: Score keywords per mode
+  const scores: { mode: AgenticMode; score: number }[] = modes.map((mode) => {
+    let score = 0;
+    for (const keyword of mode.keywords) {
+      if (normalized.includes(keyword)) score++;
     }
-  }
+    return { mode, score };
+  });
 
-  for (const keyword of IMPLEMENTATION_KEYWORDS) {
-    if (normalized.includes(keyword)) {
-      implementationScore++;
-    }
-  }
-
-  // Question marks often indicate planning/research
+  // Question marks boost modes that have "planning"-style phrases
   const questionMarks = (normalized.match(/\?/g) || []).length;
   if (questionMarks > 0) {
-    planningScore += questionMarks * 0.5;
+    for (const entry of scores) {
+      if (entry.mode.phrases && entry.mode.phrases.length > 0) {
+        entry.score += questionMarks * 0.5;
+      }
+    }
   }
 
-  // Determine task type based on scores
-  if (planningScore > implementationScore) {
-    const confidence = Math.min(0.9, 0.6 + (planningScore - implementationScore) * 0.1);
+  // Find highest scoring mode
+  scores.sort((a, b) => b.score - a.score);
+  const top = scores[0];
+  const second = scores[1];
+
+  if (top && top.score > 0) {
+    if (!second || top.score > second.score) {
+      const diff = second ? top.score - second.score : top.score;
+      const confidence = Math.min(0.9, 0.6 + diff * 0.1);
+      return {
+        mode: top.mode.name,
+        model: top.mode.model,
+        confidence,
+        reasoning: `${top.mode.name}: ${top.score}${second ? `, ${second.mode.name}: ${second.score}` : ""}`,
+      };
+    }
+
+    // Tie — prefer defaultMode among tied candidates, otherwise first in array
+    const tied = scores.filter((s) => s.score === top.score);
+    const tiedFallback = tied.find((s) => s.mode.name === defaultMode) ?? top;
     return {
-      type: "planning",
-      confidence,
-      reasoning: `Planning keywords: ${planningScore}, Implementation keywords: ${implementationScore}`,
-    };
-  } else if (implementationScore > planningScore) {
-    const confidence = Math.min(0.9, 0.6 + (implementationScore - planningScore) * 0.1);
-    return {
-      type: "implementation",
-      confidence,
-      reasoning: `Implementation keywords: ${implementationScore}, Planning keywords: ${planningScore}`,
+      mode: tiedFallback.mode.name,
+      model: tiedFallback.mode.model,
+      confidence: 0.6,
+      reasoning: `Tie between ${tied.map((s) => s.mode.name).join(", ")} (score: ${top.score}), using ${tiedFallback.mode.name}`,
     };
   }
 
-  // Default to planning for ambiguous cases (safer choice)
+  // Fallback to default mode
+  const fallback = modes.find((m) => m.name === defaultMode) ?? modes[0];
+  if (!fallback) {
+    return { mode: "unknown", model: "", confidence: 0, reasoning: "No modes configured" };
+  }
+
   return {
-    type: "planning",
+    mode: fallback.name,
+    model: fallback.model,
     confidence: 0.5,
-    reasoning: "Ambiguous prompt, defaulting to planning model",
+    reasoning: `Ambiguous prompt, defaulting to ${fallback.name}`,
   };
 }
 
 /**
  * Select the appropriate model based on task classification.
- * Returns the model identifier to use.
  */
 export function selectModel(
   prompt: string,
-  opusModel: string,
-  sonnetModel: string
-): { model: string; taskType: TaskType; reasoning: string } {
-  const classification = classifyTask(prompt);
-
-  const model = classification.type === "planning" ? opusModel : sonnetModel;
-
+  modes: AgenticMode[],
+  defaultMode: string,
+): { model: string; taskType: string; reasoning: string } {
+  const classification = classifyTask(prompt, modes, defaultMode);
   return {
-    model,
-    taskType: classification.type,
+    model: classification.model,
+    taskType: classification.mode,
     reasoning: classification.reasoning,
   };
 }

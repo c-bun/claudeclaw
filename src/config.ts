@@ -17,8 +17,35 @@ const DEFAULT_SETTINGS: Settings = {
   },
   agentic: {
     enabled: false,
-    planningModel: "opus",
-    implementationModel: "sonnet",
+    defaultMode: "implementation",
+    modes: [
+      {
+        name: "planning",
+        model: "opus",
+        keywords: [
+          "plan", "design", "architect", "strategy", "approach",
+          "research", "investigate", "analyze", "explore", "understand",
+          "think", "consider", "evaluate", "assess", "review",
+          "system design", "trade-off", "decision", "choose", "compare",
+          "brainstorm", "ideate", "concept", "proposal",
+        ],
+        phrases: [
+          "how to implement", "how should i", "what's the best way to",
+          "should i", "which approach", "help me decide", "help me understand",
+        ],
+      },
+      {
+        name: "implementation",
+        model: "sonnet",
+        keywords: [
+          "implement", "code", "write", "create", "build", "add",
+          "fix", "debug", "refactor", "update", "modify", "change",
+          "deploy", "run", "execute", "install", "configure",
+          "test", "commit", "push", "merge", "release",
+          "generate", "scaffold", "setup", "initialize",
+        ],
+      },
+    ],
   },
   timezone: "UTC",
   timezoneOffsetMinutes: 0,
@@ -88,10 +115,17 @@ export interface Settings {
   stt: SttConfig;
 }
 
+export interface AgenticMode {
+  name: string;
+  model: string;
+  keywords: string[];
+  phrases?: string[];
+}
+
 export interface AgenticConfig {
   enabled: boolean;
-  planningModel: string;
-  implementationModel: string;
+  defaultMode: string;
+  modes: AgenticMode[];
 }
 
 export interface ModelConfig {
@@ -133,6 +167,56 @@ const VALID_LEVELS = new Set<SecurityLevel>([
   "unrestricted",
 ]);
 
+function parseAgenticMode(raw: any): AgenticMode | null {
+  if (!raw || typeof raw !== "object") return null;
+  const name = typeof raw.name === "string" ? raw.name.trim() : "";
+  const model = typeof raw.model === "string" ? raw.model.trim() : "";
+  if (!name || !model) return null;
+  const keywords = Array.isArray(raw.keywords)
+    ? raw.keywords.filter((k: unknown) => typeof k === "string").map((k: string) => k.toLowerCase().trim())
+    : [];
+  const phrases = Array.isArray(raw.phrases)
+    ? raw.phrases.filter((p: unknown) => typeof p === "string").map((p: string) => p.toLowerCase().trim())
+    : undefined;
+  return { name, model, keywords, ...(phrases && phrases.length > 0 ? { phrases } : {}) };
+}
+
+function parseAgenticConfig(raw: any): AgenticConfig {
+  const defaults = DEFAULT_SETTINGS.agentic;
+  if (!raw || typeof raw !== "object") return defaults;
+
+  const enabled = raw.enabled ?? false;
+
+  // Backward compat: old planningModel/implementationModel format
+  if (!Array.isArray(raw.modes) && ("planningModel" in raw || "implementationModel" in raw)) {
+    const planningModel = typeof raw.planningModel === "string" ? raw.planningModel.trim() : "opus";
+    const implModel = typeof raw.implementationModel === "string" ? raw.implementationModel.trim() : "sonnet";
+    return {
+      enabled,
+      defaultMode: "implementation",
+      modes: [
+        { ...defaults.modes[0], model: planningModel },
+        { ...defaults.modes[1], model: implModel },
+      ],
+    };
+  }
+
+  // New modes format
+  const modes: AgenticMode[] = [];
+  if (Array.isArray(raw.modes)) {
+    for (const m of raw.modes) {
+      const parsed = parseAgenticMode(m);
+      if (parsed) modes.push(parsed);
+    }
+  }
+
+  return {
+    enabled,
+    defaultMode: typeof raw.defaultMode === "string" ? raw.defaultMode.trim() : "implementation",
+    modes: modes.length > 0 ? modes : defaults.modes,
+  };
+}
+
 function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Settings {
   const rawLevel = raw.security?.level;
   const level: SecurityLevel =
@@ -149,11 +233,7 @@ function parseSettings(raw: Record<string, any>, discordUserIds?: string[]): Set
       model: typeof raw.fallback?.model === "string" ? raw.fallback.model.trim() : "",
       api: typeof raw.fallback?.api === "string" ? raw.fallback.api.trim() : "",
     },
-    agentic: {
-      enabled: raw.agentic?.enabled ?? false,
-      planningModel: typeof raw.agentic?.planningModel === "string" ? raw.agentic.planningModel.trim() : "opus",
-      implementationModel: typeof raw.agentic?.implementationModel === "string" ? raw.agentic.implementationModel.trim() : "sonnet",
-    },
+    agentic: parseAgenticConfig(raw.agentic),
     timezone: parsedTimezone,
     timezoneOffsetMinutes: parseTimezoneOffsetMinutes(raw.timezoneOffsetMinutes, parsedTimezone),
     heartbeat: {

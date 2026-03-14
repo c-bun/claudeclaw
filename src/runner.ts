@@ -312,7 +312,7 @@ async function execClaude(name: string, prompt: string): Promise<RunResult> {
   let routingReasoning = "";
 
   if (agentic.enabled) {
-    const routing = selectModel(prompt, agentic.planningModel, agentic.implementationModel);
+    const routing = selectModel(prompt, agentic.modes, agentic.defaultMode);
     primaryConfig = { model: routing.model, api };
     taskType = routing.taskType;
     routingReasoning = routing.reasoning;
